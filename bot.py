@@ -8,6 +8,21 @@ import numpy as np
 import ccxt
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+from flask import Flask
+
+# Create Flask app for health checks
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🤖 Trading Bot is Running!"
+
+@app.route('/health')
+def health():
+    return "OK"
+
+def run_web_server():
+    app.run(host='0.0.0.0', port=5000, debug=False)
 
 # Set up logging
 logging.basicConfig(
@@ -214,19 +229,41 @@ async def signal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command"""
-    await update.message.reply_text("🤖 <b>Trading Bot Active</b>\nUse /signal for trading signals", parse_mode='HTML')
+    await update.message.reply_text(
+        "🤖 <b>High Accuracy Trading Bot</b>\n\n"
+        "Commands:\n"
+        "/signal - Get trading signal\n"
+        "/price - Current prices\n"
+        "/status - Bot status",
+        parse_mode='HTML'
+    )
 
 async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Get current prices"""
     try:
-        price_text = "💰 <b>CURRENT PRICES</b>\n\n"
+        price_text = "💰 <b>CURRENT PRICES</b> 💰\n\n"
+        
         for pair in TRADING_PAIRS:
             ticker = exchange.fetch_ticker(pair)
             price_text += f"{pair.replace('/', '')}: ${ticker['last']:,.2f}\n"
             time.sleep(0.2)
+        
+        price_text += f"\n<i>Updated: {pd.Timestamp.now().strftime('%H:%M:%S')}</i>"
         await update.message.reply_text(price_text, parse_mode='HTML')
+        
     except Exception as e:
+        logger.error(f"Error in price command: {e}")
         await update.message.reply_text("❌ Error fetching prices")
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Status command"""
+    await update.message.reply_text(
+        "🟢 <b>BOT STATUS: LIVE</b>\n"
+        "📊 Analyzing 7 pairs\n"
+        "⏰ 24/7 Operation\n"
+        "🔧 Multi-indicator analysis",
+        parse_mode='HTML'
+    )
 
 def main():
     """Start the bot"""
@@ -234,13 +271,29 @@ def main():
         logger.error("❌ BOT_TOKEN not set!")
         return
     
+    # Start web server in background
+    web_thread = threading.Thread(target=run_web_server)
+    web_thread.daemon = True
+    web_thread.start()
+    
+    # Start keep-alive
     keep_alive()
+    
+    # Create application
     application = Application.builder().token(BOT_TOKEN).build()
+    
+    # Add handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("signal", signal_command))
     application.add_handler(CommandHandler("price", price_command))
+    application.add_handler(CommandHandler("status", status_command))
     
+    # Log startup
     logger.info("🤖 Trading Bot Started!")
+    logger.info("🌐 Web server running on port 5000")
+    logger.info(f"📊 Monitoring {len(TRADING_PAIRS)} pairs")
+    
+    # Start bot
     application.run_polling()
 
 if __name__ == '__main__':
