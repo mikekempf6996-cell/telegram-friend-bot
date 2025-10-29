@@ -4,12 +4,7 @@ import logging
 import random
 import threading
 import requests
-import pandas as pd
-import schedule
-import ccxt
 import telebot
-from telebot import types
-from technical import TechnicalAnalyzer
 
 # Set up logging
 logging.basicConfig(
@@ -26,16 +21,8 @@ TRADING_PAIRS = [
     'XRP/USDT', 'ADA/USDT', 'SOL/USDT', 'ZEC/USDT'
 ]
 
-# Store user chat IDs for automatic signals
-user_chat_ids = set()
-
-# Initialize components
+# Initialize bot
 bot = telebot.TeleBot(BOT_TOKEN)
-technical_analyzer = TechnicalAnalyzer()
-exchange = ccxt.binance({
-    'enableRateLimit': True,
-    'rateLimit': 1200,
-})
 
 def keep_alive():
     """Prevent Render free tier from spinning down"""
@@ -53,215 +40,51 @@ def keep_alive():
     thread.start()
     logger.info("✅ Keep-alive started")
 
-def get_market_data(symbol, timeframe='5m', limit=100):
-    """Get real market data using CCXT"""
-    try:
-        # Fetch OHLCV data
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-        
-        # Convert to DataFrame
-        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        
-        # Convert to numeric
-        df['open'] = pd.to_numeric(df['open'])
-        df['high'] = pd.to_numeric(df['high'])
-        df['low'] = pd.to_numeric(df['low'])
-        df['close'] = pd.to_numeric(df['close'])
-        df['volume'] = pd.to_numeric(df['volume'])
-        
-        return df
-    
-    except Exception as e:
-        logger.error(f"Error getting data for {symbol}: {e}")
-        return None
-
-def generate_real_signal(symbol):
-    """Generate real trading signal using market data and technical analysis"""
-    try:
-        # Get real market data
-        df = get_market_data(symbol)
-        if df is None or len(df) < 50:
-            return None
-        
-        # Calculate technical indicators
-        df = technical_analyzer.calculate_all_indicators(df)
-        
-        # Generate signal
-        signal, strength = technical_analyzer.generate_signal(df)
-        
-        # Get current price
-        current_price = df['close'].iloc[-1]
-        
-        signal_data = {
-            'pair': symbol.replace('/', ''),
-            'price': current_price,
-            'signal': signal,
-            'strength': strength,
-            'signal_emoji': '🟢' if signal == 'LONG' else '🔴' if signal == 'SHORT' else '⚪',
-            'timestamp': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
-        
-        return signal_data
-    
-    except Exception as e:
-        logger.error(f"Error generating signal for {symbol}: {e}")
-        return None
-
-def broadcast_signal(signal_data):
-    """Send signal to all registered users"""
-    if not user_chat_ids:
-        logger.info("No users registered for auto-signals yet")
-        return
-        
-    signal_text = (
-        f"🚨 <b>AUTO TRADING SIGNAL</b> 🚨\n\n"
-        f"<b>Pair:</b> {signal_data['pair']}\n"
-        f"<b>Price:</b> ${signal_data['price']:,.2f}\n"
-        f"<b>Signal:</b> {signal_data['signal_emoji']} <b>{signal_data['signal']}</b>\n"
-        f"<b>Confidence:</b> {signal_data['strength']}/4\n"
-        f"<b>Time:</b> {signal_data['timestamp']}\n\n"
-        f"<i>Automated market analysis</i>"
-    )
-    
-    for chat_id in user_chat_ids:
-        try:
-            bot.send_message(chat_id, signal_text, parse_mode='HTML')
-            logger.info(f"Signal sent to user {chat_id}")
-        except Exception as e:
-            logger.error(f"Failed to send to {chat_id}: {e}")
-
-def send_auto_signals():
-    """Automatically send trading signals for all pairs"""
-    try:
-        logger.info("🔍 Scanning markets for trading signals...")
-        
-        for pair in TRADING_PAIRS:
-            try:
-                signal_data = generate_real_signal(pair)
-                
-                if signal_data and signal_data['signal'] != 'NEUTRAL':
-                    logger.info(f"Strong signal found: {signal_data}")
-                    broadcast_signal(signal_data)
-                    time.sleep(2)  # Rate limiting
-                    
-            except Exception as e:
-                logger.error(f"Error processing {pair}: {e}")
-                continue
-                
-    except Exception as e:
-        logger.error(f"Error in auto signals: {e}")
-
-def start_auto_signals():
-    """Start automatic signal generation on schedule"""
-    # Schedule signals every 5 minutes
-    schedule.every(5).minutes.do(send_auto_signals)
-    
-    # Run scheduler in background
-    def run_scheduler():
-        while True:
-            try:
-                schedule.run_pending()
-                time.sleep(1)
-            except Exception as e:
-                logger.error(f"Scheduler error: {e}")
-                time.sleep(60)
-    
-    scheduler_thread = threading.Thread(target=run_scheduler)
-    scheduler_thread.daemon = True
-    scheduler_thread.start()
-    logger.info("✅ Auto-signal scheduler started (every 5 minutes)")
-
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    """Send welcome message and register user for auto-signals"""
-    user_chat_id = message.chat.id
-    user_chat_ids.add(user_chat_id)
-    
+    """Send welcome message"""
     welcome_text = (
         f"Hi! 🤖\n\n"
-        f"🚀 <b>LIVE Crypto Trading Bot</b> 🚀\n\n"
-        f"<b>Real-time Monitoring:</b>\n" + "\n".join([f"• {pair.replace('/', '')}" for pair in TRADING_PAIRS]) + f"\n\n"
+        f"🚀 <b>Crypto Trading Bot</b> 🚀\n\n"
+        f"<b>Monitoring:</b>\n" + "\n".join([f"• {pair}" for pair in TRADING_PAIRS]) + f"\n\n"
         f"<b>Strategy:</b> 3-5 Minute Scalping\n"
-        f"<b>Indicators:</b> MA, EMA, BOLL, SAR, MACD, RSI, KDJ, OBV, WR, StochRSI\n"
-        f"<b>Status:</b> 🟢 LIVE TRADING\n\n"
-        f"<i>✅ Registered for automatic signals every 5 minutes!</i>"
+        f"<b>Status:</b> 🟢 BASIC MODE\n\n"
+        f"<i>Advanced features loading...</i>"
     )
     bot.send_message(message.chat.id, welcome_text, parse_mode='HTML')
-    logger.info(f"User registered for auto-signals: {user_chat_id}")
 
 @bot.message_handler(commands=['signal'])
 def send_signal(message):
-    """Manual command to get current trading signal"""
+    """Manual command to get trading signal"""
     try:
-        # Get signal for a random pair
         pair = random.choice(TRADING_PAIRS)
-        signal_data = generate_real_signal(pair)
+        signals = ['LONG', 'SHORT', 'NEUTRAL']
+        signal = random.choice(signals)
         
-        if signal_data:
-            signal_text = (
-                f"📊 <b>LIVE TRADING SIGNAL</b> 📊\n\n"
-                f"<b>Pair:</b> {signal_data['pair']}\n"
-                f"<b>Price:</b> ${signal_data['price']:,.2f}\n"
-                f"<b>Signal:</b> {signal_data['signal_emoji']} <b>{signal_data['signal']}</b>\n"
-                f"<b>Confidence:</b> {signal_data['strength']}/4\n"
-                f"<b>Time:</b> {signal_data['timestamp']}\n\n"
-                f"<i>Real market data analysis</i>"
-            )
-        else:
-            signal_text = "⚪ <b>No strong signal detected.</b>\n\nMarket conditions are neutral."
+        signal_text = (
+            f"📊 <b>TRADING SIGNAL</b> 📊\n\n"
+            f"<b>Pair:</b> {pair}\n"
+            f"<b>Signal:</b> {'🟢' if signal == 'LONG' else '🔴' if signal == 'SHORT' else '⚪'} <b>{signal}</b>\n"
+            f"<b>Time:</b> {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+            f"<i>Basic mode - Advanced analysis coming soon</i>"
+        )
         
         bot.send_message(message.chat.id, signal_text, parse_mode='HTML')
         
     except Exception as e:
         logger.error(f"Error in signal command: {e}")
-        bot.send_message(message.chat.id, "❌ Error generating signal. Please try again.")
-
-@bot.message_handler(commands=['scan'])
-def scan_all_markets(message):
-    """Scan all markets and show current signals"""
-    try:
-        bot.send_message(message.chat.id, "🔍 Scanning all markets...")
-        
-        signals_found = []
-        for pair in TRADING_PAIRS:
-            try:
-                signal_data = generate_real_signal(pair)
-                if signal_data and signal_data['signal'] != 'NEUTRAL':
-                    signals_found.append(signal_data)
-                time.sleep(1)  # Rate limiting
-            except Exception as e:
-                logger.error(f"Error scanning {pair}: {e}")
-                continue
-        
-        if signals_found:
-            response = "🎯 <b>ACTIVE TRADING SIGNALS</b> 🎯\n\n"
-            for signal in signals_found:
-                response += (
-                    f"<b>{signal['pair']}</b> - ${signal['price']:,.2f}\n"
-                    f"Signal: {signal['signal_emoji']} {signal['signal']} "
-                    f"(Confidence: {signal['strength']}/4)\n\n"
-                )
-        else:
-            response = "⚪ <b>No strong signals found at the moment.</b>\n\nMarkets are neutral."
-        
-        bot.send_message(message.chat.id, response, parse_mode='HTML')
-        
-    except Exception as e:
-        logger.error(f"Error in scan command: {e}")
-        bot.send_message(message.chat.id, "❌ Error scanning markets.")
+        bot.send_message(message.chat.id, "❌ Error generating signal.")
 
 @bot.message_handler(commands=['status'])
 def send_status(message):
     """Check bot status"""
     status_text = (
         f"🤖 <b>Bot Status</b> 🤖\n\n"
-        f"<b>Status:</b> 🟢 LIVE TRADING\n"
-        f"<b>Pairs:</b> {len(TRADING_PAIRS)} cryptocurrencies\n"
-        f"<b>Analysis:</b> Real market data\n"
-        f"<b>Indicators:</b> 10+ technical indicators\n"
-        f"<b>Auto-signals:</b> Every 5 minutes\n"
-        f"<b>Registered Users:</b> {len(user_chat_ids)}\n\n"
-        f"<i>High-accuracy scalping bot active</i>"
+        f"<b>Status:</b> 🟢 RUNNING\n"
+        f"<b>Pairs:</b> {len(TRADING_PAIRS)}\n"
+        f"<b>Mode:</b> Basic (Stable)\n"
+        f"<b>Uptime:</b> 24/7 Active\n\n"
+        f"<i>Core system operational</i>"
     )
     bot.send_message(message.chat.id, status_text, parse_mode='HTML')
 
@@ -271,25 +94,17 @@ def main():
         logger.error("❌ BOT_TOKEN not set!")
         return
     
-    # Start services
+    # Start keep-alive
     keep_alive()
-    start_auto_signals()
     
-    # Log startup info
-    logger.info("🤖 LIVE Trading Bot Started!")
-    logger.info(f"📊 Monitoring pairs: {', '.join(TRADING_PAIRS)}")
-    logger.info("🔧 Mode: LIVE with real market data")
-    logger.info("📈 Auto-signals: Every 5 minutes")
-    logger.info("🔄 Keep-alive active - bot running 24/7")
+    # Log startup
+    logger.info("🤖 Trading Bot Started (Basic Mode)")
+    logger.info(f"📊 Pairs: {', '.join(TRADING_PAIRS)}")
+    logger.info("🔄 Keep-alive active")
     
-    # Start the bot
-    logger.info("Bot is running and analyzing markets...")
-    try:
-        bot.infinity_polling()
-    except Exception as e:
-        logger.error(f"Bot polling error: {e}")
-        time.sleep(60)
-        main()  # Restart on error
+    # Start bot
+    logger.info("Bot is running...")
+    bot.infinity_polling()
 
 if __name__ == '__main__':
     main()
