@@ -1,21 +1,28 @@
 import pandas as pd
 import numpy as np
-from ta.trend import MACD, SMAIndicator, EMAIndicator, PSARIndicator, IchimokuIndicator
+from ta.trend import MACD, SMAIndicator, EMAIndicator, PSARIndicator
 from ta.momentum import RSIIndicator, StochasticOscillator, WilliamsRIndicator, StochRSIIndicator
 from ta.volume import OnBalanceVolumeIndicator
 from ta.volatility import BollingerBands
-from ta.others import DailyReturnIndicator
-import config
 
 class TechnicalAnalyzer:
     def __init__(self):
-        self.indicators_config = config.INDICATORS
+        self.indicators_config = {
+            'MA': [5, 10, 20],
+            'EMA': [5, 12, 26],
+            'BOLL': {'window': 20, 'window_dev': 2},
+            'SAR': {'acceleration': 0.02, 'maximum': 0.2},
+            'MACD': {'fast': 12, 'slow': 26, 'signal': 9},
+            'RSI': 14,
+            'KDJ': 14,
+            'OBV': {},
+            'WR': 14,
+            'STOCH_RSI': 14
+        }
     
     def calculate_all_indicators(self, df):
-        """
-        Calculate all technical indicators for the given DataFrame
-        """
-        if len(df) < 50:  # Ensure enough data
+        """Calculate all technical indicators"""
+        if len(df) < 50:
             return df
         
         # Moving Averages
@@ -32,109 +39,76 @@ class TechnicalAnalyzer:
         df['BB_upper'] = bb.bollinger_hband()
         df['BB_middle'] = bb.bollinger_mavg()
         df['BB_lower'] = bb.bollinger_lband()
-        df['BB_width'] = bb.bollinger_wband()
         
         # Parabolic SAR
         sar_config = self.indicators_config['SAR']
-        df['SAR'] = PSARIndicator(
-            high=df['high'], 
-            low=df['low'], 
-            close=df['close'],
-            step=sar_config['acceleration'],
-            max_step=sar_config['maximum']
-        ).psar()
+        df['SAR'] = PSARIndicator(high=df['high'], low=df['low'], close=df['close']).psar()
         
         # MACD
         macd_config = self.indicators_config['MACD']
-        macd = MACD(
-            close=df['close'],
-            window_fast=macd_config['fast'],
-            window_slow=macd_config['slow'],
-            window_sign=macd_config['signal']
-        )
+        macd = MACD(close=df['close'], window_fast=macd_config['fast'], window_slow=macd_config['slow'], window_sign=macd_config['signal'])
         df['MACD'] = macd.macd()
         df['MACD_signal'] = macd.macd_signal()
         df['MACD_histogram'] = macd.macd_diff()
         
         # RSI
-        rsi_period = self.indicators_config['RSI']
-        df['RSI'] = RSIIndicator(close=df['close'], window=rsi_period).rsi()
+        df['RSI'] = RSIIndicator(close=df['close'], window=self.indicators_config['RSI']).rsi()
         
-        # KDJ (Stochastic Oscillator)
-        kdj_period = self.indicators_config['KDJ']
-        stoch = StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=kdj_period)
+        # KDJ (Stochastic)
+        stoch = StochasticOscillator(high=df['high'], low=df['low'], close=df['close'], window=self.indicators_config['KDJ'])
         df['K'] = stoch.stoch()
         df['D'] = stoch.stoch_signal()
-        df['J'] = 3 * df['K'] - 2 * df['D']
         
-        # OBV (On Balance Volume)
+        # OBV
         df['OBV'] = OnBalanceVolumeIndicator(close=df['close'], volume=df['volume']).on_balance_volume()
         
         # Williams %R
-        wr_period = self.indicators_config['WR']
-        df['WR'] = WilliamsRIndicator(high=df['high'], low=df['low'], close=df['close'], lbp=wr_period).williams_r()
+        df['WR'] = WilliamsRIndicator(high=df['high'], low=df['low'], close=df['close'], lbp=self.indicators_config['WR']).williams_r()
         
         # Stochastic RSI
-        stoch_rsi_period = self.indicators_config['STOCH_RSI']
-        stoch_rsi = StochRSIIndicator(close=df['close'], window=stoch_rsi_period)
-        df['Stoch_RSI'] = stoch_rsi.stochrsi()
+        df['Stoch_RSI'] = StochRSIIndicator(close=df['close'], window=self.indicators_config['STOCH_RSI']).stochrsi()
         
         return df
     
     def generate_signal(self, df):
-        """
-        Generate trading signal based on all indicators
-        Returns: 'LONG', 'SHORT', or 'NEUTRAL'
-        """
+        """Generate trading signal based on all indicators"""
         if len(df) < 2:
-            return 'NEUTRAL'
+            return 'NEUTRAL', 0
         
         latest = df.iloc[-1]
         previous = df.iloc[-2]
         
-        # Initialize signal strengths
         long_signals = 0
         short_signals = 0
         
-        # Trend Analysis (MA/EMA)
-        if 'MA_5' in df.columns and 'MA_20' in df.columns:
-            if latest['MA_5'] > latest['MA_20'] and previous['MA_5'] <= previous['MA_20']:
-                long_signals += 1
-            elif latest['MA_5'] < latest['MA_20'] and previous['MA_5'] >= previous['MA_20']:
-                short_signals += 1
+        # Trend Analysis
+        if latest['EMA_5'] > latest['EMA_20']:
+            long_signals += 1
+        else:
+            short_signals += 1
         
         # MACD Signal
-        if 'MACD' in df.columns and 'MACD_signal' in df.columns:
-            if latest['MACD'] > latest['MACD_signal'] and previous['MACD'] <= previous['MACD_signal']:
-                long_signals += 1
-            elif latest['MACD'] < latest['MACD_signal'] and previous['MACD'] >= previous['MACD_signal']:
-                short_signals += 1
+        if latest['MACD'] > latest['MACD_signal']:
+            long_signals += 1
+        else:
+            short_signals += 1
         
         # RSI Signals
-        if 'RSI' in df.columns:
-            if latest['RSI'] < 30:  # Oversold
-                long_signals += 1
-            elif latest['RSI'] > 70:  # Overbought
-                short_signals += 1
+        if latest['RSI'] < 30:
+            long_signals += 1
+        elif latest['RSI'] > 70:
+            short_signals += 1
         
         # Bollinger Bands
-        if 'BB_lower' in df.columns and 'BB_upper' in df.columns:
-            if latest['close'] <= latest['BB_lower']:
-                long_signals += 1
-            elif latest['close'] >= latest['BB_upper']:
-                short_signals += 1
-        
-        # KDJ Signals
-        if 'K' in df.columns and 'D' in df.columns:
-            if latest['K'] < 20 and latest['D'] < 20:  # Oversold
-                long_signals += 1
-            elif latest['K'] > 80 and latest['D'] > 80:  # Overbought
-                short_signals += 1
+        if latest['close'] <= latest['BB_lower']:
+            long_signals += 1
+        elif latest['close'] >= latest['BB_upper']:
+            short_signals += 1
         
         # Generate final signal
-        if long_signals >= 3 and long_signals > short_signals:
-            return 'LONG'
-        elif short_signals >= 3 and short_signals > long_signals:
-            return 'SHORT'
+        if long_signals >= 3:
+            return 'LONG', long_signals
+        elif short_signals >= 3:
+            return 'SHORT', short_signals
         else:
-            return 'NEUTRAL'
+            return 'NEUTRAL', 0
