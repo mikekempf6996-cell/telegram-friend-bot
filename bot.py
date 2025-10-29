@@ -6,8 +6,7 @@ import threading
 import requests
 import pandas as pd
 import schedule
-from binance.client import Client
-from binance.exceptions import BinanceAPIException
+import ccxt
 import telebot
 from telebot import types
 from technical import TechnicalAnalyzer
@@ -23,8 +22,8 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv('BOT_TOKEN', 'your_bot_token_here')
 
 TRADING_PAIRS = [
-    'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 
-    'XRPUSDT', 'ADAUSDT', 'SOLUSDT', 'ZECUSDT'
+    'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 
+    'XRP/USDT', 'ADA/USDT', 'SOL/USDT', 'ZEC/USDT'
 ]
 
 # Store user chat IDs for automatic signals
@@ -33,7 +32,10 @@ user_chat_ids = set()
 # Initialize components
 bot = telebot.TeleBot(BOT_TOKEN)
 technical_analyzer = TechnicalAnalyzer()
-binance_client = Client()  # Public data only for now
+exchange = ccxt.binance({
+    'enableRateLimit': True,
+    'rateLimit': 1200,
+})
 
 def keep_alive():
     """Prevent Render free tier from spinning down"""
@@ -51,21 +53,14 @@ def keep_alive():
     thread.start()
     logger.info("✅ Keep-alive started")
 
-def get_binance_data(symbol, interval='5m', limit=100):
-    """Get real market data from Binance"""
+def get_market_data(symbol, timeframe='5m', limit=100):
+    """Get real market data using CCXT"""
     try:
-        klines = binance_client.get_klines(
-            symbol=symbol,
-            interval=interval,
-            limit=limit
-        )
+        # Fetch OHLCV data
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         
         # Convert to DataFrame
-        df = pd.DataFrame(klines, columns=[
-            'open_time', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'quote_asset_volume', 'number_of_trades',
-            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-        ])
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
         # Convert to numeric
         df['open'] = pd.to_numeric(df['open'])
@@ -76,18 +71,15 @@ def get_binance_data(symbol, interval='5m', limit=100):
         
         return df
     
-    except BinanceAPIException as e:
-        logger.error(f"Binance API error for {symbol}: {e}")
-        return None
     except Exception as e:
         logger.error(f"Error getting data for {symbol}: {e}")
         return None
 
 def generate_real_signal(symbol):
-    """Generate real trading signal using Binance data and technical analysis"""
+    """Generate real trading signal using market data and technical analysis"""
     try:
         # Get real market data
-        df = get_binance_data(symbol)
+        df = get_market_data(symbol)
         if df is None or len(df) < 50:
             return None
         
@@ -101,7 +93,7 @@ def generate_real_signal(symbol):
         current_price = df['close'].iloc[-1]
         
         signal_data = {
-            'pair': symbol,
+            'pair': symbol.replace('/', ''),
             'price': current_price,
             'signal': signal,
             'strength': strength,
@@ -144,11 +136,17 @@ def send_auto_signals():
         logger.info("🔍 Scanning markets for trading signals...")
         
         for pair in TRADING_PAIRS:
-            signal_data = generate_real_signal(pair)
-            
-            if signal_data and signal_data['signal'] != 'NEUTRAL':
-                logger.info(f"Strong signal found: {signal_data}")
-                broadcast_signal(signal_data)
+            try:
+                signal_data = generate_real_signal(pair)
+                
+                if signal_data and signal_data['signal'] != 'NEUTRAL':
+                    logger.info(f"Strong signal found: {signal_data}")
+                    broadcast_signal(signal_data)
+                    time.sleep(2)  # Rate limiting
+                    
+            except Exception as e:
+                logger.error(f"Error processing {pair}: {e}")
+                continue
                 
     except Exception as e:
         logger.error(f"Error in auto signals: {e}")
@@ -161,8 +159,12 @@ def start_auto_signals():
     # Run scheduler in background
     def run_scheduler():
         while True:
-            schedule.run_pending()
-            time.sleep(1)
+            try:
+                schedule.run_pending()
+                time.sleep(1)
+            except Exception as e:
+                logger.error(f"Scheduler error: {e}")
+                time.sleep(60)
     
     scheduler_thread = threading.Thread(target=run_scheduler)
     scheduler_thread.daemon = True
@@ -178,7 +180,7 @@ def send_welcome(message):
     welcome_text = (
         f"Hi! 🤖\n\n"
         f"🚀 <b>LIVE Crypto Trading Bot</b> 🚀\n\n"
-        f"<b>Real-time Monitoring:</b>\n" + "\n".join([f"• {pair}" for pair in TRADING_PAIRS]) + f"\n\n"
+        f"<b>Real-time Monitoring:</b>\n" + "\n".join([f"• {pair.replace('/', '')}" for pair in TRADING_PAIRS]) + f"\n\n"
         f"<b>Strategy:</b> 3-5 Minute Scalping\n"
         f"<b>Indicators:</b> MA, EMA, BOLL, SAR, MACD, RSI, KDJ, OBV, WR, StochRSI\n"
         f"<b>Status:</b> 🟢 LIVE TRADING\n\n"
@@ -203,10 +205,10 @@ def send_signal(message):
                 f"<b>Signal:</b> {signal_data['signal_emoji']} <b>{signal_data['signal']}</b>\n"
                 f"<b>Confidence:</b> {signal_data['strength']}/4\n"
                 f"<b>Time:</b> {signal_data['timestamp']}\n\n"
-                f"<i>Real Binance market data analysis</i>"
+                f"<i>Real market data analysis</i>"
             )
         else:
-            signal_text = "❌ Could not generate signal. Please try again."
+            signal_text = "⚪ <b>No strong signal detected.</b>\n\nMarket conditions are neutral."
         
         bot.send_message(message.chat.id, signal_text, parse_mode='HTML')
         
@@ -222,9 +224,14 @@ def scan_all_markets(message):
         
         signals_found = []
         for pair in TRADING_PAIRS:
-            signal_data = generate_real_signal(pair)
-            if signal_data and signal_data['signal'] != 'NEUTRAL':
-                signals_found.append(signal_data)
+            try:
+                signal_data = generate_real_signal(pair)
+                if signal_data and signal_data['signal'] != 'NEUTRAL':
+                    signals_found.append(signal_data)
+                time.sleep(1)  # Rate limiting
+            except Exception as e:
+                logger.error(f"Error scanning {pair}: {e}")
+                continue
         
         if signals_found:
             response = "🎯 <b>ACTIVE TRADING SIGNALS</b> 🎯\n\n"
@@ -250,7 +257,7 @@ def send_status(message):
         f"🤖 <b>Bot Status</b> 🤖\n\n"
         f"<b>Status:</b> 🟢 LIVE TRADING\n"
         f"<b>Pairs:</b> {len(TRADING_PAIRS)} cryptocurrencies\n"
-        f"<b>Analysis:</b> Real Binance data\n"
+        f"<b>Analysis:</b> Real market data\n"
         f"<b>Indicators:</b> 10+ technical indicators\n"
         f"<b>Auto-signals:</b> Every 5 minutes\n"
         f"<b>Registered Users:</b> {len(user_chat_ids)}\n\n"
@@ -271,13 +278,18 @@ def main():
     # Log startup info
     logger.info("🤖 LIVE Trading Bot Started!")
     logger.info(f"📊 Monitoring pairs: {', '.join(TRADING_PAIRS)}")
-    logger.info("🔧 Mode: LIVE with real Binance data")
+    logger.info("🔧 Mode: LIVE with real market data")
     logger.info("📈 Auto-signals: Every 5 minutes")
     logger.info("🔄 Keep-alive active - bot running 24/7")
     
     # Start the bot
     logger.info("Bot is running and analyzing markets...")
-    bot.infinity_polling()
+    try:
+        bot.infinity_polling()
+    except Exception as e:
+        logger.error(f"Bot polling error: {e}")
+        time.sleep(60)
+        main()  # Restart on error
 
 if __name__ == '__main__':
     main()
