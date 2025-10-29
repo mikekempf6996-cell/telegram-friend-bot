@@ -1,6 +1,7 @@
-pytelegrambotapi==4.14.0
+python-telegram-bot==20.7
 python-dotenv==1.0.0
 requests==2.31.0
 ccxt==4.1.76
 pandas==1.5.3
 numpy==1.24.3
+ta-lib==0.4.26  # For technical analysis
