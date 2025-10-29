@@ -2,6 +2,8 @@ import os
 import time
 import logging
 import random
+import threading
+import requests
 import telebot
 from telebot import types
 
@@ -20,6 +22,23 @@ TRADING_PAIRS = [
     'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 
     'XRPUSDT', 'ADAUSDT', 'SOLUSDT', 'ZECUSDT'
 ]
+
+def keep_alive():
+    """Prevent Render free tier from spinning down"""
+    def ping():
+        while True:
+            try:
+                # Ping a reliable website to keep connection alive
+                requests.get('https://www.google.com', timeout=10)
+                time.sleep(300)  # Ping every 5 minutes
+            except Exception as e:
+                print(f"Keep-alive ping failed: {e}")
+                time.sleep(300)
+    
+    thread = threading.Thread(target=ping)
+    thread.daemon = True
+    thread.start()
+    print("✅ Keep-alive started - bot will run 24/7")
 
 # Initialize bot
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -96,11 +115,15 @@ def main():
         logger.error("❌ BOT_TOKEN not set! Please add it in Render environment variables.")
         return
     
+    # Start keep-alive to prevent spinning down
+    keep_alive()
+    
     # Log bot info
     logger.info("🤖 Trading Bot Started!")
     logger.info(f"📊 Monitoring pairs: {', '.join(TRADING_PAIRS)}")
     logger.info(f"🔧 Mode: {'TEST' if TEST_MODE else 'LIVE'}")
     logger.info("🚀 Basic version - Technical analysis coming soon!")
+    logger.info("🔄 Keep-alive active - bot will run 24/7")
     
     # Start the Bot
     logger.info("Bot is running...")
