@@ -21,12 +21,14 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 BOT_TOKEN = os.getenv('BOT_TOKEN', 'your_bot_token_here')
-TEST_MODE = os.getenv('TEST_MODE', 'True').lower() == 'true'
 
 TRADING_PAIRS = [
     'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 
     'XRPUSDT', 'ADAUSDT', 'SOLUSDT', 'ZECUSDT'
 ]
+
+# Store user chat IDs for automatic signals
+user_chat_ids = set()
 
 # Initialize components
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -113,6 +115,29 @@ def generate_real_signal(symbol):
         logger.error(f"Error generating signal for {symbol}: {e}")
         return None
 
+def broadcast_signal(signal_data):
+    """Send signal to all registered users"""
+    if not user_chat_ids:
+        logger.info("No users registered for auto-signals yet")
+        return
+        
+    signal_text = (
+        f"🚨 <b>AUTO TRADING SIGNAL</b> 🚨\n\n"
+        f"<b>Pair:</b> {signal_data['pair']}\n"
+        f"<b>Price:</b> ${signal_data['price']:,.2f}\n"
+        f"<b>Signal:</b> {signal_data['signal_emoji']} <b>{signal_data['signal']}</b>\n"
+        f"<b>Confidence:</b> {signal_data['strength']}/4\n"
+        f"<b>Time:</b> {signal_data['timestamp']}\n\n"
+        f"<i>Automated market analysis</i>"
+    )
+    
+    for chat_id in user_chat_ids:
+        try:
+            bot.send_message(chat_id, signal_text, parse_mode='HTML')
+            logger.info(f"Signal sent to user {chat_id}")
+        except Exception as e:
+            logger.error(f"Failed to send to {chat_id}: {e}")
+
 def send_auto_signals():
     """Automatically send trading signals for all pairs"""
     try:
@@ -122,19 +147,8 @@ def send_auto_signals():
             signal_data = generate_real_signal(pair)
             
             if signal_data and signal_data['signal'] != 'NEUTRAL':
-                # Send signal to all users (you'll need to store user IDs)
-                signal_text = (
-                    f"🚨 <b>LIVE TRADING SIGNAL</b> 🚨\n\n"
-                    f"<b>Pair:</b> {signal_data['pair']}\n"
-                    f"<b>Price:</b> ${signal_data['price']:,.2f}\n"
-                    f"<b>Signal:</b> {signal_data['signal_emoji']} <b>{signal_data['signal']}</b>\n"
-                    f"<b>Confidence:</b> {signal_data['strength']}/4\n"
-                    f"<b>Time:</b> {signal_data['timestamp']}\n\n"
-                    f"<i>Based on real market analysis</i>"
-                )
-                
-                # For now, log the signal (you'll implement user broadcasting later)
-                logger.info(f"Auto signal generated: {signal_data}")
+                logger.info(f"Strong signal found: {signal_data}")
+                broadcast_signal(signal_data)
                 
     except Exception as e:
         logger.error(f"Error in auto signals: {e}")
@@ -157,7 +171,10 @@ def start_auto_signals():
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    """Send welcome message"""
+    """Send welcome message and register user for auto-signals"""
+    user_chat_id = message.chat.id
+    user_chat_ids.add(user_chat_id)
+    
     welcome_text = (
         f"Hi! 🤖\n\n"
         f"🚀 <b>LIVE Crypto Trading Bot</b> 🚀\n\n"
@@ -165,15 +182,16 @@ def send_welcome(message):
         f"<b>Strategy:</b> 3-5 Minute Scalping\n"
         f"<b>Indicators:</b> MA, EMA, BOLL, SAR, MACD, RSI, KDJ, OBV, WR, StochRSI\n"
         f"<b>Status:</b> 🟢 LIVE TRADING\n\n"
-        f"<i>Automatic signals every 5 minutes!</i>"
+        f"<i>✅ Registered for automatic signals every 5 minutes!</i>"
     )
     bot.send_message(message.chat.id, welcome_text, parse_mode='HTML')
+    logger.info(f"User registered for auto-signals: {user_chat_id}")
 
 @bot.message_handler(commands=['signal'])
 def send_signal(message):
     """Manual command to get current trading signal"""
     try:
-        # Get signal for a random pair (or you can let user choose)
+        # Get signal for a random pair
         pair = random.choice(TRADING_PAIRS)
         signal_data = generate_real_signal(pair)
         
@@ -234,7 +252,8 @@ def send_status(message):
         f"<b>Pairs:</b> {len(TRADING_PAIRS)} cryptocurrencies\n"
         f"<b>Analysis:</b> Real Binance data\n"
         f"<b>Indicators:</b> 10+ technical indicators\n"
-        f"<b>Auto-signals:</b> Every 5 minutes\n\n"
+        f"<b>Auto-signals:</b> Every 5 minutes\n"
+        f"<b>Registered Users:</b> {len(user_chat_ids)}\n\n"
         f"<i>High-accuracy scalping bot active</i>"
     )
     bot.send_message(message.chat.id, status_text, parse_mode='HTML')
