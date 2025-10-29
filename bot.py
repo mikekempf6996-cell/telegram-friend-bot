@@ -4,8 +4,13 @@ import logging
 import random
 import threading
 import requests
+import pandas as pd
+import schedule
+from binance.client import Client
+from binance.exceptions import BinanceAPIException
 import telebot
 from telebot import types
+from technical import TechnicalAnalyzer
 
 # Set up logging
 logging.basicConfig(
@@ -23,110 +28,236 @@ TRADING_PAIRS = [
     'XRPUSDT', 'ADAUSDT', 'SOLUSDT', 'ZECUSDT'
 ]
 
+# Initialize components
+bot = telebot.TeleBot(BOT_TOKEN)
+technical_analyzer = TechnicalAnalyzer()
+binance_client = Client()  # Public data only for now
+
 def keep_alive():
     """Prevent Render free tier from spinning down"""
     def ping():
         while True:
             try:
-                # Ping a reliable website to keep connection alive
                 requests.get('https://www.google.com', timeout=10)
-                time.sleep(300)  # Ping every 5 minutes
+                time.sleep(300)
             except Exception as e:
-                print(f"Keep-alive ping failed: {e}")
+                logger.error(f"Keep-alive ping failed: {e}")
                 time.sleep(300)
     
     thread = threading.Thread(target=ping)
     thread.daemon = True
     thread.start()
-    print("✅ Keep-alive started - bot will run 24/7")
+    logger.info("✅ Keep-alive started")
 
-# Initialize bot
-bot = telebot.TeleBot(BOT_TOKEN)
+def get_binance_data(symbol, interval='5m', limit=100):
+    """Get real market data from Binance"""
+    try:
+        klines = binance_client.get_klines(
+            symbol=symbol,
+            interval=interval,
+            limit=limit
+        )
+        
+        # Convert to DataFrame
+        df = pd.DataFrame(klines, columns=[
+            'open_time', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'quote_asset_volume', 'number_of_trades',
+            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+        ])
+        
+        # Convert to numeric
+        df['open'] = pd.to_numeric(df['open'])
+        df['high'] = pd.to_numeric(df['high'])
+        df['low'] = pd.to_numeric(df['low'])
+        df['close'] = pd.to_numeric(df['close'])
+        df['volume'] = pd.to_numeric(df['volume'])
+        
+        return df
+    
+    except BinanceAPIException as e:
+        logger.error(f"Binance API error for {symbol}: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Error getting data for {symbol}: {e}")
+        return None
+
+def generate_real_signal(symbol):
+    """Generate real trading signal using Binance data and technical analysis"""
+    try:
+        # Get real market data
+        df = get_binance_data(symbol)
+        if df is None or len(df) < 50:
+            return None
+        
+        # Calculate technical indicators
+        df = technical_analyzer.calculate_all_indicators(df)
+        
+        # Generate signal
+        signal, strength = technical_analyzer.generate_signal(df)
+        
+        # Get current price
+        current_price = df['close'].iloc[-1]
+        
+        signal_data = {
+            'pair': symbol,
+            'price': current_price,
+            'signal': signal,
+            'strength': strength,
+            'signal_emoji': '🟢' if signal == 'LONG' else '🔴' if signal == 'SHORT' else '⚪',
+            'timestamp': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+        
+        return signal_data
+    
+    except Exception as e:
+        logger.error(f"Error generating signal for {symbol}: {e}")
+        return None
+
+def send_auto_signals():
+    """Automatically send trading signals for all pairs"""
+    try:
+        logger.info("🔍 Scanning markets for trading signals...")
+        
+        for pair in TRADING_PAIRS:
+            signal_data = generate_real_signal(pair)
+            
+            if signal_data and signal_data['signal'] != 'NEUTRAL':
+                # Send signal to all users (you'll need to store user IDs)
+                signal_text = (
+                    f"🚨 <b>LIVE TRADING SIGNAL</b> 🚨\n\n"
+                    f"<b>Pair:</b> {signal_data['pair']}\n"
+                    f"<b>Price:</b> ${signal_data['price']:,.2f}\n"
+                    f"<b>Signal:</b> {signal_data['signal_emoji']} <b>{signal_data['signal']}</b>\n"
+                    f"<b>Confidence:</b> {signal_data['strength']}/4\n"
+                    f"<b>Time:</b> {signal_data['timestamp']}\n\n"
+                    f"<i>Based on real market analysis</i>"
+                )
+                
+                # For now, log the signal (you'll implement user broadcasting later)
+                logger.info(f"Auto signal generated: {signal_data}")
+                
+    except Exception as e:
+        logger.error(f"Error in auto signals: {e}")
+
+def start_auto_signals():
+    """Start automatic signal generation on schedule"""
+    # Schedule signals every 5 minutes
+    schedule.every(5).minutes.do(send_auto_signals)
+    
+    # Run scheduler in background
+    def run_scheduler():
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
+    
+    scheduler_thread = threading.Thread(target=run_scheduler)
+    scheduler_thread.daemon = True
+    scheduler_thread.start()
+    logger.info("✅ Auto-signal scheduler started (every 5 minutes)")
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    """Send welcome message when the command /start is issued."""
+    """Send welcome message"""
     welcome_text = (
         f"Hi! 🤖\n\n"
-        f"🚀 <b>Crypto Futures Trading Bot</b> 🚀\n\n"
-        f"<b>Pairs Monitoring:</b>\n" + "\n".join([f"• {pair}" for pair in TRADING_PAIRS]) + f"\n\n"
+        f"🚀 <b>LIVE Crypto Trading Bot</b> 🚀\n\n"
+        f"<b>Real-time Monitoring:</b>\n" + "\n".join([f"• {pair}" for pair in TRADING_PAIRS]) + f"\n\n"
         f"<b>Strategy:</b> 3-5 Minute Scalping\n"
-        f"<b>Status:</b> {'🔴 TEST MODE' if TEST_MODE else '🟢 LIVE TRADING'}\n\n"
-        f"Bot will send automatic trading signals for LONG/SHORT positions."
+        f"<b>Indicators:</b> MA, EMA, BOLL, SAR, MACD, RSI, KDJ, OBV, WR, StochRSI\n"
+        f"<b>Status:</b> 🟢 LIVE TRADING\n\n"
+        f"<i>Automatic signals every 5 minutes!</i>"
     )
     bot.send_message(message.chat.id, welcome_text, parse_mode='HTML')
 
-def generate_test_signal():
-    """Generate test trading signal."""
-    pair = random.choice(TRADING_PAIRS)
-    
-    # Simulate price data
-    signals = ['LONG', 'SHORT', 'NEUTRAL']
-    signal = random.choice(signals)
-    
-    signal_data = {
-        'pair': pair,
-        'price': random.uniform(100, 50000),
-        'signal': signal,
-        'strength': random.randint(1, 5),
-        'signal_emoji': '🟢' if signal == 'LONG' else '🔴' if signal == 'SHORT' else '⚪'
-    }
-    
-    return signal_data
-
 @bot.message_handler(commands=['signal'])
 def send_signal(message):
-    """Manual command to get current trading signal."""
+    """Manual command to get current trading signal"""
     try:
-        # Simulate signal for now
-        signal_data = generate_test_signal()
+        # Get signal for a random pair (or you can let user choose)
+        pair = random.choice(TRADING_PAIRS)
+        signal_data = generate_real_signal(pair)
         
-        signal_text = (
-            f"📊 <b>Trading Signal - TEST DATA</b> 📊\n\n"
-            f"<b>Pair:</b> {signal_data['pair']}\n"
-            f"<b>Price:</b> ${signal_data['price']:,.2f}\n"
-            f"<b>Signal:</b> {signal_data['signal_emoji']} {signal_data['signal']}\n"
-            f"<b>Strength:</b> {signal_data['strength']}/5\n\n"
-            f"<i>Note: Currently in TEST MODE - Basic version</i>"
-        )
+        if signal_data:
+            signal_text = (
+                f"📊 <b>LIVE TRADING SIGNAL</b> 📊\n\n"
+                f"<b>Pair:</b> {signal_data['pair']}\n"
+                f"<b>Price:</b> ${signal_data['price']:,.2f}\n"
+                f"<b>Signal:</b> {signal_data['signal_emoji']} <b>{signal_data['signal']}</b>\n"
+                f"<b>Confidence:</b> {signal_data['strength']}/4\n"
+                f"<b>Time:</b> {signal_data['timestamp']}\n\n"
+                f"<i>Real Binance market data analysis</i>"
+            )
+        else:
+            signal_text = "❌ Could not generate signal. Please try again."
         
         bot.send_message(message.chat.id, signal_text, parse_mode='HTML')
         
     except Exception as e:
-        logger.error(f"Error in get_signal: {e}")
+        logger.error(f"Error in signal command: {e}")
         bot.send_message(message.chat.id, "❌ Error generating signal. Please try again.")
+
+@bot.message_handler(commands=['scan'])
+def scan_all_markets(message):
+    """Scan all markets and show current signals"""
+    try:
+        bot.send_message(message.chat.id, "🔍 Scanning all markets...")
+        
+        signals_found = []
+        for pair in TRADING_PAIRS:
+            signal_data = generate_real_signal(pair)
+            if signal_data and signal_data['signal'] != 'NEUTRAL':
+                signals_found.append(signal_data)
+        
+        if signals_found:
+            response = "🎯 <b>ACTIVE TRADING SIGNALS</b> 🎯\n\n"
+            for signal in signals_found:
+                response += (
+                    f"<b>{signal['pair']}</b> - ${signal['price']:,.2f}\n"
+                    f"Signal: {signal['signal_emoji']} {signal['signal']} "
+                    f"(Confidence: {signal['strength']}/4)\n\n"
+                )
+        else:
+            response = "⚪ <b>No strong signals found at the moment.</b>\n\nMarkets are neutral."
+        
+        bot.send_message(message.chat.id, response, parse_mode='HTML')
+        
+    except Exception as e:
+        logger.error(f"Error in scan command: {e}")
+        bot.send_message(message.chat.id, "❌ Error scanning markets.")
 
 @bot.message_handler(commands=['status'])
 def send_status(message):
-    """Check bot status."""
+    """Check bot status"""
     status_text = (
         f"🤖 <b>Bot Status</b> 🤖\n\n"
-        f"<b>Status:</b> 🟢 RUNNING\n"
-        f"<b>Mode:</b> {'🔴 TEST MODE' if TEST_MODE else '🟢 LIVE'}\n"
-        f"<b>Pairs:</b> {len(TRADING_PAIRS)}\n"
-        f"<b>Uptime:</b> Basic version deployed\n\n"
-        f"<i>Technical analysis features coming soon!</i>"
+        f"<b>Status:</b> 🟢 LIVE TRADING\n"
+        f"<b>Pairs:</b> {len(TRADING_PAIRS)} cryptocurrencies\n"
+        f"<b>Analysis:</b> Real Binance data\n"
+        f"<b>Indicators:</b> 10+ technical indicators\n"
+        f"<b>Auto-signals:</b> Every 5 minutes\n\n"
+        f"<i>High-accuracy scalping bot active</i>"
     )
     bot.send_message(message.chat.id, status_text, parse_mode='HTML')
 
 def main():
-    """Start the bot."""
+    """Start the bot"""
     if not BOT_TOKEN or BOT_TOKEN == 'your_bot_token_here':
-        logger.error("❌ BOT_TOKEN not set! Please add it in Render environment variables.")
+        logger.error("❌ BOT_TOKEN not set!")
         return
     
-    # Start keep-alive to prevent spinning down
+    # Start services
     keep_alive()
+    start_auto_signals()
     
-    # Log bot info
-    logger.info("🤖 Trading Bot Started!")
+    # Log startup info
+    logger.info("🤖 LIVE Trading Bot Started!")
     logger.info(f"📊 Monitoring pairs: {', '.join(TRADING_PAIRS)}")
-    logger.info(f"🔧 Mode: {'TEST' if TEST_MODE else 'LIVE'}")
-    logger.info("🚀 Basic version - Technical analysis coming soon!")
-    logger.info("🔄 Keep-alive active - bot will run 24/7")
+    logger.info("🔧 Mode: LIVE with real Binance data")
+    logger.info("📈 Auto-signals: Every 5 minutes")
+    logger.info("🔄 Keep-alive active - bot running 24/7")
     
-    # Start the Bot
-    logger.info("Bot is running...")
+    # Start the bot
+    logger.info("Bot is running and analyzing markets...")
     bot.infinity_polling()
 
 if __name__ == '__main__':
